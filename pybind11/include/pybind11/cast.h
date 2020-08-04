@@ -32,10 +32,6 @@
 #include <string_view>
 #endif
 
-#if defined(__cpp_lib_char8_t) && __cpp_lib_char8_t >= 201811L
-#  define PYBIND11_HAS_U8STRING
-#endif
-
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 
@@ -288,8 +284,8 @@ public:
         // Past-the-end iterator:
         iterator(size_t end) : curr(end) {}
     public:
-        bool operator==(const iterator &other) const { return curr.index == other.curr.index; }
-        bool operator!=(const iterator &other) const { return curr.index != other.curr.index; }
+        bool operator==(const iterator &other) { return curr.index == other.curr.index; }
+        bool operator!=(const iterator &other) { return curr.index != other.curr.index; }
         iterator &operator++() {
             if (!inst->simple_layout)
                 curr.vh += 1 + (*types)[curr.index]->holder_size_in_ptrs;
@@ -537,17 +533,9 @@ public:
             case return_value_policy::copy:
                 if (copy_constructor)
                     valueptr = copy_constructor(src);
-                else {
-#if defined(NDEBUG)
-                    throw cast_error("return_value_policy = copy, but type is "
-                                     "non-copyable! (compile in debug mode for details)");
-#else
-                    std::string type_name(tinfo->cpptype->name());
-                    detail::clean_type_id(type_name);
-                    throw cast_error("return_value_policy = copy, but type " +
-                                     type_name + " is non-copyable!");
-#endif
-                }
+                else
+                    throw cast_error("return_value_policy = copy, but the "
+                                     "object is non-copyable!");
                 wrapper->owned = true;
                 break;
 
@@ -556,18 +544,9 @@ public:
                     valueptr = move_constructor(src);
                 else if (copy_constructor)
                     valueptr = copy_constructor(src);
-                else {
-#if defined(NDEBUG)
-                    throw cast_error("return_value_policy = move, but type is neither "
-                                     "movable nor copyable! "
-                                     "(compile in debug mode for details)");
-#else
-                    std::string type_name(tinfo->cpptype->name());
-                    detail::clean_type_id(type_name);
-                    throw cast_error("return_value_policy = move, but type " +
-                                     type_name + " is neither movable nor copyable!");
-#endif
-                }
+                else
+                    throw cast_error("return_value_policy = move, but the "
+                                     "object is neither movable nor copyable!");
                 wrapper->owned = true;
                 break;
 
@@ -595,10 +574,10 @@ public:
             if (type->operator_new) {
                 vptr = type->operator_new(type->type_size);
             } else {
-                #if defined(__cpp_aligned_new) && (!defined(_MSC_VER) || _MSC_VER >= 1912)
+                #if defined(PYBIND11_CPP17)
                     if (type->type_align > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
                         vptr = ::operator new(type->type_size,
-                                              std::align_val_t(type->type_align));
+                                              (std::align_val_t) type->type_align);
                     else
                 #endif
                 vptr = ::operator new(type->type_size);
@@ -796,25 +775,15 @@ template <typename T, typename SFINAE = void> struct is_copy_constructible : std
 // so, copy constructability depends on whether the value_type is copy constructible.
 template <typename Container> struct is_copy_constructible<Container, enable_if_t<all_of<
         std::is_copy_constructible<Container>,
-        std::is_same<typename Container::value_type &, typename Container::reference>,
-        // Avoid infinite recursion
-        negation<std::is_same<Container, typename Container::value_type>>
+        std::is_same<typename Container::value_type &, typename Container::reference>
     >::value>> : is_copy_constructible<typename Container::value_type> {};
 
-// Likewise for std::pair
-// (after C++17 it is mandatory that the copy constructor not exist when the two types aren't themselves
-// copy constructible, but this can not be relied upon when T1 or T2 are themselves containers).
+#if !defined(PYBIND11_CPP17)
+// Likewise for std::pair before C++17 (which mandates that the copy constructor not exist when the
+// two types aren't themselves copy constructible).
 template <typename T1, typename T2> struct is_copy_constructible<std::pair<T1, T2>>
     : all_of<is_copy_constructible<T1>, is_copy_constructible<T2>> {};
-
-// The same problems arise with std::is_copy_assignable, so we use the same workaround.
-template <typename T, typename SFINAE = void> struct is_copy_assignable : std::is_copy_assignable<T> {};
-template <typename Container> struct is_copy_assignable<Container, enable_if_t<all_of<
-        std::is_copy_assignable<Container>,
-        std::is_same<typename Container::value_type &, typename Container::reference>
-    >::value>> : is_copy_assignable<typename Container::value_type> {};
-template <typename T1, typename T2> struct is_copy_assignable<std::pair<T1, T2>>
-    : all_of<is_copy_assignable<T1>, is_copy_assignable<T2>> {};
+#endif
 
 NAMESPACE_END(detail)
 
@@ -835,25 +804,19 @@ NAMESPACE_END(detail)
 // You may specialize polymorphic_type_hook yourself for types that want to appear
 // polymorphic to Python but do not use C++ RTTI. (This is a not uncommon pattern
 // in performance-sensitive applications, used most notably in LLVM.)
-//
-// polymorphic_type_hook_base allows users to specialize polymorphic_type_hook with
-// std::enable_if. User provided specializations will always have higher priority than
-// the default implementation and specialization provided in polymorphic_type_hook_base.
 template <typename itype, typename SFINAE = void>
-struct polymorphic_type_hook_base
+struct polymorphic_type_hook
 {
     static const void *get(const itype *src, const std::type_info*&) { return src; }
 };
 template <typename itype>
-struct polymorphic_type_hook_base<itype, detail::enable_if_t<std::is_polymorphic<itype>::value>>
+struct polymorphic_type_hook<itype, detail::enable_if_t<std::is_polymorphic<itype>::value>>
 {
     static const void *get(const itype *src, const std::type_info*& type) {
         type = src ? &typeid(*src) : nullptr;
         return dynamic_cast<const void*>(src);
     }
 };
-template <typename itype, typename SFINAE = void>
-struct polymorphic_type_hook : public polymorphic_type_hook_base<itype> {};
 
 NAMESPACE_BEGIN(detail)
 
@@ -998,9 +961,6 @@ public:
 
 template <typename CharT> using is_std_char_type = any_of<
     std::is_same<CharT, char>, /* std::string */
-#if defined(PYBIND11_HAS_U8STRING)
-    std::is_same<CharT, char8_t>, /* std::u8string */
-#endif
     std::is_same<CharT, char16_t>, /* std::u16string */
     std::is_same<CharT, char32_t>, /* std::u32string */
     std::is_same<CharT, wchar_t> /* std::wstring */
@@ -1035,11 +995,9 @@ public:
         }
 
         bool py_err = py_value == (py_type) -1 && PyErr_Occurred();
-
-        // Protect std::numeric_limits::min/max with parentheses
         if (py_err || (std::is_integral<T>::value && sizeof(py_type) != sizeof(T) &&
-                       (py_value < (py_type) (std::numeric_limits<T>::min)() ||
-                        py_value > (py_type) (std::numeric_limits<T>::max)()))) {
+                       (py_value < (py_type) std::numeric_limits<T>::min() ||
+                        py_value > (py_type) std::numeric_limits<T>::max()))) {
             bool type_error = py_err && PyErr_ExceptionMatches(
 #if PY_VERSION_HEX < 0x03000000 && !defined(PYPY_VERSION)
                 PyExc_SystemError
@@ -1185,8 +1143,6 @@ public:
             if (res == 0 || res == 1) {
                 value = (bool) res;
                 return true;
-            } else {
-                PyErr_Clear();
             }
         }
         return false;
@@ -1204,9 +1160,6 @@ template <typename StringType, bool IsView = false> struct string_caster {
     // Simplify life by being able to assume standard char sizes (the standard only guarantees
     // minimums, but Python requires exact sizes)
     static_assert(!std::is_same<CharT, char>::value || sizeof(CharT) == 1, "Unsupported char size != 1");
-#if defined(PYBIND11_HAS_U8STRING)
-    static_assert(!std::is_same<CharT, char8_t>::value || sizeof(CharT) == 1, "Unsupported char8_t size != 1");
-#endif
     static_assert(!std::is_same<CharT, char16_t>::value || sizeof(CharT) == 2, "Unsupported char16_t size != 2");
     static_assert(!std::is_same<CharT, char32_t>::value || sizeof(CharT) == 4, "Unsupported char32_t size != 4");
     // wchar_t can be either 16 bits (Windows) or 32 (everywhere else)
@@ -1225,7 +1178,7 @@ template <typename StringType, bool IsView = false> struct string_caster {
 #if PY_MAJOR_VERSION >= 3
             return load_bytes(load_src);
 #else
-            if (std::is_same<CharT, char>::value) {
+            if (sizeof(CharT) == 1) {
                 return load_bytes(load_src);
             }
 
@@ -1285,7 +1238,7 @@ private:
     // without any encoding/decoding attempt).  For other C++ char sizes this is a no-op.
     // which supports loading a unicode from a str, doesn't take this path.
     template <typename C = CharT>
-    bool load_bytes(enable_if_t<std::is_same<C, char>::value, handle> src) {
+    bool load_bytes(enable_if_t<sizeof(C) == 1, handle> src) {
         if (PYBIND11_BYTES_CHECK(src.ptr())) {
             // We were passed a Python 3 raw bytes; accept it into a std::string or char*
             // without any encoding attempt.
@@ -1300,7 +1253,7 @@ private:
     }
 
     template <typename C = CharT>
-    bool load_bytes(enable_if_t<!std::is_same<C, char>::value, handle>) { return false; }
+    bool load_bytes(enable_if_t<sizeof(C) != 1, handle>) { return false; }
 };
 
 template <typename CharT, class Traits, class Allocator>
@@ -1438,14 +1391,9 @@ protected:
 
     template <size_t... Is>
     bool load_impl(const sequence &seq, bool convert, index_sequence<Is...>) {
-#ifdef __cpp_fold_expressions
-        if ((... || !std::get<Is>(subcasters).load(seq[Is], convert)))
-            return false;
-#else
         for (bool r : {std::get<Is>(subcasters).load(seq[Is], convert)...})
             if (!r)
                 return false;
-#endif
         return true;
     }
 
@@ -1887,11 +1835,6 @@ public:
 #endif
 };
 
-/// \ingroup annotations
-/// Annotation indicating that all following arguments are keyword-only; the is the equivalent of an
-/// unnamed '*' argument (in Python 3)
-struct kwonly {};
-
 template <typename T>
 arg_v arg::operator=(T &&value) const { return {std::move(*this), std::forward<T>(value)}; }
 
@@ -1977,19 +1920,14 @@ private:
 
     template <size_t... Is>
     bool load_impl_sequence(function_call &call, index_sequence<Is...>) {
-#ifdef __cpp_fold_expressions
-        if ((... || !std::get<Is>(argcasters).load(call.args[Is], call.args_convert[Is])))
-            return false;
-#else
         for (bool r : {std::get<Is>(argcasters).load(call.args[Is], call.args_convert[Is])...})
             if (!r)
                 return false;
-#endif
         return true;
     }
 
     template <typename Return, typename Func, size_t... Is, typename Guard>
-    Return call_impl(Func &&f, index_sequence<Is...>, Guard &&) && {
+    Return call_impl(Func &&f, index_sequence<Is...>, Guard &&) {
         return std::forward<Func>(f)(cast_op<Args>(std::move(std::get<Is>(argcasters)))...);
     }
 

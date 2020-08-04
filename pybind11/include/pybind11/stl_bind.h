@@ -115,14 +115,6 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     using SizeType = typename Vector::size_type;
     using DiffType = typename Vector::difference_type;
 
-    auto wrap_i = [](DiffType i, SizeType n) {
-        if (i < 0)
-            i += n;
-        if (i < 0 || (SizeType)i >= n)
-            throw index_error();
-        return i;
-    };
-
     cl.def("append",
            [](Vector &v, const T &value) { v.push_back(value); },
            arg("x"),
@@ -135,13 +127,6 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
            v->push_back(h.cast<T>());
         return v.release();
     }));
-
-    cl.def("clear",
-        [](Vector &v) {
-            v.clear();
-        },
-        "Clear the contents"
-    );
 
     cl.def("extend",
        [](Vector &v, const Vector &src) {
@@ -174,13 +159,10 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     );
 
     cl.def("insert",
-        [](Vector &v, DiffType i, const T &x) {
-            // Can't use wrap_i; i == v.size() is OK
-            if (i < 0)
-                i += v.size();
-            if (i < 0 || (SizeType)i > v.size())
+        [](Vector &v, SizeType i, const T &x) {
+            if (i > v.size())
                 throw index_error();
-            v.insert(v.begin() + i, x);
+            v.insert(v.begin() + (DiffType) i, x);
         },
         arg("i") , arg("x"),
         "Insert an item at a given position."
@@ -198,10 +180,11 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     );
 
     cl.def("pop",
-        [wrap_i](Vector &v, DiffType i) {
-            i = wrap_i(i, v.size());
-            T t = v[(SizeType) i];
-            v.erase(v.begin() + i);
+        [](Vector &v, SizeType i) {
+            if (i >= v.size())
+                throw index_error();
+            T t = v[i];
+            v.erase(v.begin() + (DiffType) i);
             return t;
         },
         arg("i"),
@@ -209,9 +192,10 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     );
 
     cl.def("__setitem__",
-        [wrap_i](Vector &v, DiffType i, const T &t) {
-            i = wrap_i(i, v.size());
-            v[(SizeType)i] = t;
+        [](Vector &v, SizeType i, const T &t) {
+            if (i >= v.size())
+                throw index_error();
+            v[i] = t;
         }
     );
 
@@ -254,9 +238,10 @@ void vector_modifiers(enable_if_t<is_copy_constructible<typename Vector::value_t
     );
 
     cl.def("__delitem__",
-        [wrap_i](Vector &v, DiffType i) {
-            i = wrap_i(i, v.size());
-            v.erase(v.begin() + i);
+        [](Vector &v, SizeType i) {
+            if (i >= v.size())
+                throw index_error();
+            v.erase(v.begin() + DiffType(i));
         },
         "Delete the list elements at index ``i``"
     );
@@ -292,21 +277,13 @@ template <typename Vector, typename Class_>
 void vector_accessor(enable_if_t<!vector_needs_copy<Vector>::value, Class_> &cl) {
     using T = typename Vector::value_type;
     using SizeType = typename Vector::size_type;
-    using DiffType = typename Vector::difference_type;
     using ItType   = typename Vector::iterator;
 
-    auto wrap_i = [](DiffType i, SizeType n) {
-        if (i < 0)
-            i += n;
-        if (i < 0 || (SizeType)i >= n)
-            throw index_error();
-        return i;
-    };
-
     cl.def("__getitem__",
-        [wrap_i](Vector &v, DiffType i) -> T & {
-            i = wrap_i(i, v.size());
-            return v[(SizeType)i];
+        [](Vector &v, SizeType i) -> T & {
+            if (i >= v.size())
+                throw index_error();
+            return v[i];
         },
         return_value_policy::reference_internal // ref + keepalive
     );
@@ -326,15 +303,12 @@ template <typename Vector, typename Class_>
 void vector_accessor(enable_if_t<vector_needs_copy<Vector>::value, Class_> &cl) {
     using T = typename Vector::value_type;
     using SizeType = typename Vector::size_type;
-    using DiffType = typename Vector::difference_type;
     using ItType   = typename Vector::iterator;
     cl.def("__getitem__",
-        [](const Vector &v, DiffType i) -> T {
-            if (i < 0 && (i += v.size()) < 0)
+        [](const Vector &v, SizeType i) -> T {
+            if (i >= v.size())
                 throw index_error();
-            if ((SizeType)i >= v.size())
-                throw index_error();
-            return v[(SizeType)i];
+            return v[i];
         }
     );
 
@@ -519,7 +493,7 @@ template <typename, typename, typename... Args> void map_assignment(const Args &
 
 // Map assignment when copy-assignable: just copy the value
 template <typename Map, typename Class_>
-void map_assignment(enable_if_t<is_copy_assignable<typename Map::mapped_type>::value, Class_> &cl) {
+void map_assignment(enable_if_t<std::is_copy_assignable<typename Map::mapped_type>::value, Class_> &cl) {
     using KeyType = typename Map::key_type;
     using MappedType = typename Map::mapped_type;
 
@@ -535,7 +509,7 @@ void map_assignment(enable_if_t<is_copy_assignable<typename Map::mapped_type>::v
 // Not copy-assignable, but still copy-constructible: we can update the value by erasing and reinserting
 template<typename Map, typename Class_>
 void map_assignment(enable_if_t<
-        !is_copy_assignable<typename Map::mapped_type>::value &&
+        !std::is_copy_assignable<typename Map::mapped_type>::value &&
         is_copy_constructible<typename Map::mapped_type>::value,
         Class_> &cl) {
     using KeyType = typename Map::key_type;

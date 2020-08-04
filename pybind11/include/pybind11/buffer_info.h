@@ -21,15 +21,14 @@ struct buffer_info {
     std::string format;           // For homogeneous buffers, this should be set to format_descriptor<T>::format()
     ssize_t ndim = 0;             // Number of dimensions
     std::vector<ssize_t> shape;   // Shape of the tensor (1 entry per dimension)
-    std::vector<ssize_t> strides; // Number of bytes between adjacent entries (for each per dimension)
-    bool readonly = false;        // flag to indicate if the underlying storage may be written to
+    std::vector<ssize_t> strides; // Number of entries between adjacent entries (for each per dimension)
 
     buffer_info() { }
 
     buffer_info(void *ptr, ssize_t itemsize, const std::string &format, ssize_t ndim,
-                detail::any_container<ssize_t> shape_in, detail::any_container<ssize_t> strides_in, bool readonly=false)
+                detail::any_container<ssize_t> shape_in, detail::any_container<ssize_t> strides_in)
     : ptr(ptr), itemsize(itemsize), size(1), format(format), ndim(ndim),
-      shape(std::move(shape_in)), strides(std::move(strides_in)), readonly(readonly) {
+      shape(std::move(shape_in)), strides(std::move(strides_in)) {
         if (ndim != (ssize_t) shape.size() || ndim != (ssize_t) strides.size())
             pybind11_fail("buffer_info: ndim doesn't match shape and/or strides length");
         for (size_t i = 0; i < (size_t) ndim; ++i)
@@ -37,23 +36,19 @@ struct buffer_info {
     }
 
     template <typename T>
-    buffer_info(T *ptr, detail::any_container<ssize_t> shape_in, detail::any_container<ssize_t> strides_in, bool readonly=false)
-    : buffer_info(private_ctr_tag(), ptr, sizeof(T), format_descriptor<T>::format(), static_cast<ssize_t>(shape_in->size()), std::move(shape_in), std::move(strides_in), readonly) { }
+    buffer_info(T *ptr, detail::any_container<ssize_t> shape_in, detail::any_container<ssize_t> strides_in)
+    : buffer_info(private_ctr_tag(), ptr, sizeof(T), format_descriptor<T>::format(), static_cast<ssize_t>(shape_in->size()), std::move(shape_in), std::move(strides_in)) { }
 
-    buffer_info(void *ptr, ssize_t itemsize, const std::string &format, ssize_t size, bool readonly=false)
-    : buffer_info(ptr, itemsize, format, 1, {size}, {itemsize}, readonly) { }
-
-    template <typename T>
-    buffer_info(T *ptr, ssize_t size, bool readonly=false)
-    : buffer_info(ptr, sizeof(T), format_descriptor<T>::format(), size, readonly) { }
+    buffer_info(void *ptr, ssize_t itemsize, const std::string &format, ssize_t size)
+    : buffer_info(ptr, itemsize, format, 1, {size}, {itemsize}) { }
 
     template <typename T>
-    buffer_info(const T *ptr, ssize_t size, bool readonly=true)
-    : buffer_info(const_cast<T*>(ptr), sizeof(T), format_descriptor<T>::format(), size, readonly) { }
+    buffer_info(T *ptr, ssize_t size)
+    : buffer_info(ptr, sizeof(T), format_descriptor<T>::format(), size) { }
 
     explicit buffer_info(Py_buffer *view, bool ownview = true)
     : buffer_info(view->buf, view->itemsize, view->format, view->ndim,
-            {view->shape, view->shape + view->ndim}, {view->strides, view->strides + view->ndim}, view->readonly) {
+            {view->shape, view->shape + view->ndim}, {view->strides, view->strides + view->ndim}) {
         this->view = view;
         this->ownview = ownview;
     }
@@ -75,7 +70,6 @@ struct buffer_info {
         strides = std::move(rhs.strides);
         std::swap(view, rhs.view);
         std::swap(ownview, rhs.ownview);
-        readonly = rhs.readonly;
         return *this;
     }
 
@@ -87,8 +81,8 @@ private:
     struct private_ctr_tag { };
 
     buffer_info(private_ctr_tag, void *ptr, ssize_t itemsize, const std::string &format, ssize_t ndim,
-                detail::any_container<ssize_t> &&shape_in, detail::any_container<ssize_t> &&strides_in, bool readonly)
-    : buffer_info(ptr, itemsize, format, ndim, std::move(shape_in), std::move(strides_in), readonly) { }
+                detail::any_container<ssize_t> &&shape_in, detail::any_container<ssize_t> &&strides_in)
+    : buffer_info(ptr, itemsize, format, ndim, std::move(shape_in), std::move(strides_in)) { }
 
     Py_buffer *view = nullptr;
     bool ownview = false;

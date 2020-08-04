@@ -41,14 +41,15 @@
 #  endif
 #endif
 
+#if defined(__GNUG__) && !defined(__clang__)
+ #include <cxxabi.h>
+#endif
+
+
 #include "attr.h"
 #include "options.h"
 #include "detail/class.h"
 #include "detail/init.h"
-
-#if defined(__GNUG__) && !defined(__clang__)
-#  include <cxxabi.h>
-#endif
 
 NAMESPACE_BEGIN(PYBIND11_NAMESPACE)
 
@@ -167,14 +168,6 @@ protected:
 
         /* Process any user-provided function attributes */
         process_attributes<Extra...>::init(extra..., rec);
-
-        {
-            constexpr bool has_kwonly_args = any_of<std::is_same<kwonly, Extra>...>::value,
-                           has_args = any_of<std::is_same<args, Args>...>::value,
-                           has_arg_annotations = any_of<is_keyword<Extra>...>::value;
-            static_assert(has_arg_annotations || !has_kwonly_args, "py::kwonly requires the use of argument annotations");
-            static_assert(!(has_args && has_kwonly_args), "py::kwonly cannot be combined with a py::args argument");
-        }
 
         /* Generate a readable signature describing the function's arguments and return value types */
         static constexpr auto signature = _("(") + cast_in::arg_names + _(") -> ") + cast_out::name;
@@ -491,20 +484,19 @@ protected:
                  */
 
                 const function_record &func = *it;
-                size_t num_args = func.nargs;    // Number of positional arguments that we need
-                if (func.has_args) --num_args;   // (but don't count py::args
-                if (func.has_kwargs) --num_args; //  or py::kwargs)
-                size_t pos_args = num_args - func.nargs_kwonly;
+                size_t pos_args = func.nargs;    // Number of positional arguments that we need
+                if (func.has_args) --pos_args;   // (but don't count py::args
+                if (func.has_kwargs) --pos_args; //  or py::kwargs)
 
                 if (!func.has_args && n_args_in > pos_args)
-                    continue; // Too many positional arguments for this overload
+                    continue; // Too many arguments for this overload
 
                 if (n_args_in < pos_args && func.args.size() < pos_args)
-                    continue; // Not enough positional arguments given, and not enough defaults to fill in the blanks
+                    continue; // Not enough arguments given, and not enough defaults to fill in the blanks
 
                 function_call call(func, parent);
 
-                size_t args_to_copy = (std::min)(pos_args, n_args_in); // Protect std::min with parentheses
+                size_t args_to_copy = std::min(pos_args, n_args_in);
                 size_t args_copied = 0;
 
                 // 0. Inject new-style `self` argument
@@ -544,10 +536,10 @@ protected:
                 dict kwargs = reinterpret_borrow<dict>(kwargs_in);
 
                 // 2. Check kwargs and, failing that, defaults that may help complete the list
-                if (args_copied < num_args) {
+                if (args_copied < pos_args) {
                     bool copied_kwargs = false;
 
-                    for (; args_copied < num_args; ++args_copied) {
+                    for (; args_copied < pos_args; ++args_copied) {
                         const auto &arg = func.args[args_copied];
 
                         handle value;
@@ -573,7 +565,7 @@ protected:
                             break;
                     }
 
-                    if (args_copied < num_args)
+                    if (args_copied < pos_args)
                         continue; // Not enough arguments, defaults, or kwargs to fill the positional arguments
                 }
 
@@ -1012,21 +1004,14 @@ void call_operator_delete(T *p, size_t s, size_t) { T::operator delete(p, s); }
 
 inline void call_operator_delete(void *p, size_t s, size_t a) {
     (void)s; (void)a;
-    #if defined(__cpp_aligned_new) && (!defined(_MSC_VER) || _MSC_VER >= 1912)
-        if (a > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-            #ifdef __cpp_sized_deallocation
-                ::operator delete(p, s, std::align_val_t(a));
-            #else
-                ::operator delete(p, std::align_val_t(a));
-            #endif
-            return;
-        }
-    #endif
-    #ifdef __cpp_sized_deallocation
+#if defined(PYBIND11_CPP17)
+    if (a > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+        ::operator delete(p, s, std::align_val_t(a));
+    else
         ::operator delete(p, s);
-    #else
-        ::operator delete(p);
-    #endif
+#else
+    ::operator delete(p);
+#endif
 }
 
 NAMESPACE_END(detail)
@@ -1427,7 +1412,7 @@ struct enum_base {
                         return pybind11::str("{}.{}").format(type_name, kv.first);
                 }
                 return pybind11::str("{}.???").format(type_name);
-            }, name("__repr__"), is_method(m_base)
+            }, is_method(m_base)
         );
 
         m_base.attr("name") = property(cpp_function(
@@ -1438,7 +1423,7 @@ struct enum_base {
                         return pybind11::str(kv.first);
                 }
                 return "???";
-            }, name("name"), is_method(m_base)
+            }, is_method(m_base)
         ));
 
         m_base.attr("__doc__") = static_property(cpp_function(
@@ -1456,7 +1441,7 @@ struct enum_base {
                         docstring += " : " + (std::string) pybind11::str(comment);
                 }
                 return docstring;
-            }, name("__doc__")
+            }
         ), none(), none(), "");
 
         m_base.attr("__members__") = static_property(cpp_function(
@@ -1465,7 +1450,7 @@ struct enum_base {
                 for (const auto &kv : entries)
                     m[kv.first] = kv.second[int_(0)];
                 return m;
-            }, name("__members__")), none(), none(), ""
+            }), none(), none(), ""
         );
 
         #define PYBIND11_ENUM_OP_STRICT(op, expr, strict_behavior)                     \
@@ -1475,7 +1460,7 @@ struct enum_base {
                         strict_behavior;                                               \
                     return expr;                                                       \
                 },                                                                     \
-                name(op), is_method(m_base))
+                is_method(m_base))
 
         #define PYBIND11_ENUM_OP_CONV(op, expr)                                        \
             m_base.attr(op) = cpp_function(                                            \
@@ -1483,19 +1468,11 @@ struct enum_base {
                     int_ a(a_), b(b_);                                                 \
                     return expr;                                                       \
                 },                                                                     \
-                name(op), is_method(m_base))
-
-        #define PYBIND11_ENUM_OP_CONV_LHS(op, expr)                                    \
-            m_base.attr(op) = cpp_function(                                            \
-                [](object a_, object b) {                                              \
-                    int_ a(a_);                                                        \
-                    return expr;                                                       \
-                },                                                                     \
-                name(op), is_method(m_base))
+                is_method(m_base))
 
         if (is_convertible) {
-            PYBIND11_ENUM_OP_CONV_LHS("__eq__", !b.is_none() &&  a.equal(b));
-            PYBIND11_ENUM_OP_CONV_LHS("__ne__",  b.is_none() || !a.equal(b));
+            PYBIND11_ENUM_OP_CONV("__eq__", !b.is_none() &&  a.equal(b));
+            PYBIND11_ENUM_OP_CONV("__ne__",  b.is_none() || !a.equal(b));
 
             if (is_arithmetic) {
                 PYBIND11_ENUM_OP_CONV("__lt__",   a <  b);
@@ -1508,8 +1485,6 @@ struct enum_base {
                 PYBIND11_ENUM_OP_CONV("__ror__",  a |  b);
                 PYBIND11_ENUM_OP_CONV("__xor__",  a ^  b);
                 PYBIND11_ENUM_OP_CONV("__rxor__", a ^  b);
-                m_base.attr("__invert__") = cpp_function(
-                    [](object arg) { return ~(int_(arg)); }, name("__invert__"), is_method(m_base));
             }
         } else {
             PYBIND11_ENUM_OP_STRICT("__eq__",  int_(a).equal(int_(b)), return false);
@@ -1525,15 +1500,14 @@ struct enum_base {
             }
         }
 
-        #undef PYBIND11_ENUM_OP_CONV_LHS
         #undef PYBIND11_ENUM_OP_CONV
         #undef PYBIND11_ENUM_OP_STRICT
 
-        m_base.attr("__getstate__") = cpp_function(
-            [](object arg) { return int_(arg); }, name("__getstate__"), is_method(m_base));
+        object getstate = cpp_function(
+            [](object arg) { return int_(arg); }, is_method(m_base));
 
-        m_base.attr("__hash__") = cpp_function(
-            [](object arg) { return int_(arg); }, name("__hash__"), is_method(m_base));
+        m_base.attr("__getstate__") = getstate;
+        m_base.attr("__hash__") = getstate;
     }
 
     PYBIND11_NOINLINE void value(char const* name_, object value, const char *doc = nullptr) {
@@ -1582,16 +1556,10 @@ public:
         #if PY_MAJOR_VERSION < 3
             def("__long__", [](Type value) { return (Scalar) value; });
         #endif
-        #if PY_MAJOR_VERSION > 3 || (PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION >= 8)
-            def("__index__", [](Type value) { return (Scalar) value; });
-        #endif
-
-        attr("__setstate__") = cpp_function(
-            [](detail::value_and_holder &v_h, Scalar arg) {
-                detail::initimpl::setstate<Base>(v_h, static_cast<Type>(arg),
-                        Py_TYPE(v_h.inst) != v_h.type->type); },
-            detail::is_new_style_constructor(),
-            pybind11::name("__setstate__"), is_method(*this));
+        cpp_function setstate(
+            [](Type &value, Scalar arg) { value = static_cast<Type>(arg); },
+            is_method(*this));
+        attr("__setstate__") = setstate;
     }
 
     /// Export enumeration entries into the parent scope
@@ -2031,8 +1999,8 @@ class gil_scoped_release { };
 
 error_already_set::~error_already_set() {
     if (m_type) {
-        gil_scoped_acquire gil;
         error_scope scope;
+        gil_scoped_acquire gil;
         m_type.release().dec_ref();
         m_value.release().dec_ref();
         m_trace.release().dec_ref();
